@@ -23,6 +23,7 @@ FEATURES = [
     "volatility_20",
     "volume_change",
 ]
+MAX_MODEL_OBSERVATIONS = 2_500
 
 
 def _feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -45,7 +46,11 @@ def _feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 def compare_models(frame: pd.DataFrame) -> dict[str, Any]:
     features = _feature_frame(frame)
-    dataset = features.dropna(subset=FEATURES + ["target"]).copy()
+    dataset = (
+        features.dropna(subset=FEATURES + ["target"])
+        .tail(MAX_MODEL_OBSERVATIONS)
+        .copy()
+    )
     latest_features = features[FEATURES].dropna().tail(1)
     if len(dataset) < 80 or latest_features.empty:
         return {

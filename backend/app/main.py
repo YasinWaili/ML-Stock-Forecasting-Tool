@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from .services.analytics import (
     add_indicators,
@@ -13,6 +14,8 @@ from .services.analytics import (
     technical_snapshot,
 )
 from .services.insights import create_insights
+from .services.cache import TTLCache
+from .services.downsampling import largest_triangle_three_buckets
 from .services.market_data import fetch_history, fetch_overview, search_symbols
 from .services.prediction import compare_models
 
@@ -27,6 +30,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(GZipMiddleware, minimum_size=1_000, compresslevel=5)
+
+_dashboard_cache: TTLCache[tuple[str, str, int], dict[str, Any]] = TTLCache(
+    max_size=32, ttl_seconds=180
 )
 
 
@@ -53,10 +61,18 @@ def search_stocks(q: str = Query(min_length=1, max_length=80)) -> dict[str, Any]
 
 
 @app.get("/api/stocks/{symbol}/dashboard")
-def stock_dashboard(symbol: str, period: str = "1y") -> dict[str, Any]:
+def stock_dashboard(
+    symbol: str,
+    period: str = "1y",
+    max_points: int = Query(default=650, ge=200, le=1_200),
+) -> dict[str, Any]:
     normalized = symbol.strip().upper()
     if not normalized or len(normalized) > 12:
         raise HTTPException(status_code=400, detail="Enter a valid ticker symbol.")
+    cache_key = (normalized, period, max_points)
+    cached = _dashboard_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
     try:
         history = fetch_history(normalized, period)
@@ -81,8 +97,11 @@ def stock_dashboard(symbol: str, period: str = "1y") -> dict[str, Any]:
             detail="Market data is temporarily unavailable. Please try again shortly.",
         ) from error
 
+    chart_source = largest_triangle_three_buckets(
+        indicators, max_points, value_column="Close"
+    )
     chart = []
-    for index, row in indicators.iterrows():
+    for index, row in chart_source.iterrows():
         chart.append(
             {
                 "date": index.date().isoformat(),
@@ -99,7 +118,7 @@ def stock_dashboard(symbol: str, period: str = "1y") -> dict[str, Any]:
             }
         )
 
-    return _safe(
+    response = _safe(
         {
             "overview": overview,
             "statistics": statistics,
@@ -109,5 +128,13 @@ def stock_dashboard(symbol: str, period: str = "1y") -> dict[str, Any]:
             "insights": insights,
             "chart": chart,
             "period": period,
+            "performance": {
+                "source_points": len(indicators),
+                "rendered_points": len(chart),
+                "sampling": "largest-triangle-three-buckets",
+                "model_observation_limit": 2_500,
+            },
         }
     )
+    _dashboard_cache.set(cache_key, response)
+    return response

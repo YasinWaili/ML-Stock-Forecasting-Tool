@@ -27,7 +27,15 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Area,
   Bar,
@@ -41,7 +49,7 @@ import {
 } from "recharts";
 
 import { demoData } from "./demo-data";
-import type { DashboardData } from "./types";
+import type { ChartPoint, DashboardData, StockSearchResult } from "./types";
 
 const periods = [
   ["1m", "1M"],
@@ -65,30 +73,55 @@ const percent = (value: number, digits = 1) =>
 const compact = (value: number) =>
   new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value);
 
-function MetricCard({
+function ContainerLoader({
+  label = "Calculating",
+  compact = false,
+}: {
+  label?: string;
+  compact?: boolean;
+}) {
+  return (
+    <div className={compact ? "container-loader compact" : "container-loader"} aria-hidden="true">
+      <div className="loader-skeleton">
+        <span />
+        <span />
+        {!compact && <span />}
+      </div>
+      <div className="loader-status">
+        <i />
+        <small>{label}</small>
+      </div>
+    </div>
+  );
+}
+
+const MetricCard = memo(function MetricCard({
   label,
   value,
   detail,
   tone = "neutral",
   icon,
+  loading = false,
 }: {
   label: string;
   value: string;
   detail: string;
   tone?: "positive" | "negative" | "neutral" | "amber";
   icon: React.ReactNode;
+  loading?: boolean;
 }) {
   return (
-    <article className="metric-card">
+    <article className={loading ? "metric-card loading-surface" : "metric-card"}>
       <div className={`metric-icon ${tone}`}>{icon}</div>
       <div>
         <span className="eyebrow">{label}</span>
         <strong className={`metric-value ${tone}`}>{value}</strong>
         <span className="metric-detail">{detail}</span>
       </div>
+      {loading && <ContainerLoader compact label="Updating" />}
     </article>
   );
-}
+});
 
 function ChartTip({
   active,
@@ -110,6 +143,128 @@ function ChartTip({
   );
 }
 
+const PriceChart = memo(function PriceChart({
+  points,
+  chartMin,
+  chartMax,
+  showSma,
+  showBands,
+  loading,
+}: {
+  points: ChartPoint[];
+  chartMin: number;
+  chartMax: number;
+  showSma: boolean;
+  showBands: boolean;
+  loading: boolean;
+}) {
+  return (
+    <div className={loading ? "chart-wrap loading" : "chart-wrap graph-reveal"}>
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={points} margin={{ top: 12, right: 4, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#8b7cff" stopOpacity={0.35} />
+              <stop offset="100%" stopColor="#8b7cff" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke="#252937" strokeDasharray="3 5" vertical={false} />
+          <XAxis
+            dataKey="date"
+            axisLine={false}
+            tickLine={false}
+            minTickGap={42}
+            tick={{ fill: "#747b8e", fontSize: 11 }}
+            tickFormatter={(value) =>
+              new Date(`${value}T12:00:00`).toLocaleDateString("en-US", {
+                month: "short",
+              })
+            }
+          />
+          <YAxis
+            yAxisId="price"
+            orientation="right"
+            domain={[chartMin, chartMax]}
+            axisLine={false}
+            tickLine={false}
+            width={46}
+            tick={{ fill: "#747b8e", fontSize: 11 }}
+            tickFormatter={(value) => `$${value}`}
+          />
+          <YAxis yAxisId="volume" hide domain={[0, "dataMax * 4"]} />
+          <ChartTooltip
+            content={<ChartTip />}
+            cursor={{ stroke: "#7267f0", strokeDasharray: "4 4" }}
+          />
+          <Bar
+            yAxisId="volume"
+            dataKey="volume"
+            fill="#30364a"
+            opacity={0.45}
+            isAnimationActive={false}
+          />
+          {showBands && (
+            <Line
+              yAxisId="price"
+              dataKey="upper_band"
+              stroke="#3ea6ff"
+              strokeOpacity={0.45}
+              strokeDasharray="4 5"
+              dot={false}
+              isAnimationActive={false}
+            />
+          )}
+          {showBands && (
+            <Line
+              yAxisId="price"
+              dataKey="lower_band"
+              stroke="#3ea6ff"
+              strokeOpacity={0.45}
+              strokeDasharray="4 5"
+              dot={false}
+              isAnimationActive={false}
+            />
+          )}
+          <Area
+            yAxisId="price"
+            type="monotone"
+            dataKey="close"
+            stroke="#9a8cff"
+            strokeWidth={2.4}
+            fill="url(#priceFill)"
+            dot={false}
+            activeDot={{ r: 4, fill: "#b8afff", stroke: "#11131a", strokeWidth: 2 }}
+            isAnimationActive={false}
+          />
+          {showSma && (
+            <Line
+              yAxisId="price"
+              type="monotone"
+              dataKey="sma20"
+              stroke="#32c7a0"
+              strokeWidth={1.5}
+              dot={false}
+              isAnimationActive={false}
+            />
+          )}
+          {showSma && (
+            <Line
+              yAxisId="price"
+              type="monotone"
+              dataKey="sma50"
+              stroke="#e5a94d"
+              strokeWidth={1.4}
+              dot={false}
+              isAnimationActive={false}
+            />
+          )}
+        </ComposedChart>
+      </ResponsiveContainer>
+      {loading && <ContainerLoader label="Sampling & analyzing" />}
+    </div>
+  );
+});
+
 export default function StockDashboard() {
   const [data, setData] = useState<DashboardData>(demoData);
   const [symbol, setSymbol] = useState("AAPL");
@@ -123,34 +278,117 @@ export default function StockDashboard() {
   const [activeInsight, setActiveInsight] = useState(0);
   const [recent, setRecent] = useState<string[]>(["MSFT", "NVDA"]);
   const [mobileNav, setMobileNav] = useState(false);
+  const [suggestions, setSuggestions] = useState<StockSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [transitionStock, setTransitionStock] = useState<StockSearchResult | null>(null);
+  const [identityPhase, setIdentityPhase] = useState<"launch" | "dock">("launch");
+  const dashboardAbortRef = useRef<AbortController | null>(null);
+  const requestSequenceRef = useRef(0);
 
-  const loadStock = useCallback(async (ticker: string, selectedPeriod: string) => {
-    setLoading(true);
-    setError("");
-    try {
-      const response = await fetch(
-        `${API_BASE}/api/stocks/${encodeURIComponent(ticker)}/dashboard?period=${selectedPeriod}`,
-      );
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.detail || "That symbol could not be loaded.");
+  const loadStock = useCallback(
+    async (
+      ticker: string,
+      selectedPeriod: string,
+      identity?: StockSearchResult,
+    ) => {
+      dashboardAbortRef.current?.abort();
+      const controller = new AbortController();
+      dashboardAbortRef.current = controller;
+      const requestSequence = ++requestSequenceRef.current;
+      const startedAt = Date.now();
+      const pendingIdentity = identity ?? {
+        symbol: ticker.toUpperCase(),
+        name: ticker.toUpperCase(),
+        exchange: "",
+        type: "EQUITY",
+      };
+
+      setTransitionStock(pendingIdentity);
+      setIdentityPhase("launch");
+      setLoading(true);
+      setError("");
+      window.setTimeout(() => setIdentityPhase("dock"), 30);
+
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/stocks/${encodeURIComponent(ticker)}/dashboard?period=${selectedPeriod}&max_points=650`,
+          { signal: controller.signal },
+        );
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.detail || "That symbol could not be loaded.");
+        }
+        const payload = (await response.json()) as DashboardData;
+        const remainingMotionTime = Math.max(0, 520 - (Date.now() - startedAt));
+        if (remainingMotionTime) {
+          await new Promise((resolve) => window.setTimeout(resolve, remainingMotionTime));
+        }
+        if (requestSequence !== requestSequenceRef.current) return;
+
+        setData(payload);
+        setSymbol(payload.overview.symbol);
+        setIsDemo(false);
+        setRecent((current) => {
+          const next = [
+            payload.overview.symbol,
+            ...current.filter((item) => item !== payload.overview.symbol),
+          ].slice(0, 5);
+          localStorage.setItem("northstar-recent", JSON.stringify(next));
+          return next;
+        });
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === "AbortError") return;
+        if (requestSequence !== requestSequenceRef.current) return;
+        setError(caught instanceof Error ? caught.message : "Market data is unavailable.");
+        setIsDemo(true);
+      } finally {
+        if (requestSequence === requestSequenceRef.current) {
+          setLoading(false);
+          window.setTimeout(() => {
+            if (requestSequence === requestSequenceRef.current) {
+              setTransitionStock(null);
+            }
+          }, 260);
+        }
       }
-      const payload = (await response.json()) as DashboardData;
-      setData(payload);
-      setSymbol(payload.overview.symbol);
-      setIsDemo(false);
-      setRecent((current) => {
-        const next = [payload.overview.symbol, ...current.filter((item) => item !== payload.overview.symbol)].slice(0, 5);
-        localStorage.setItem("northstar-recent", JSON.stringify(next));
-        return next;
-      });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Market data is unavailable.");
-      setIsDemo(true);
-    } finally {
-      setLoading(false);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const cleaned = query.trim();
+    if (cleaned.length < 2) {
+      setSuggestions([]);
+      setSearching(false);
+      return;
     }
-  }, []);
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setSearching(true);
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/stocks/search?q=${encodeURIComponent(cleaned)}`,
+          { signal: controller.signal },
+        );
+        if (!response.ok) throw new Error("Search is temporarily unavailable.");
+        const payload = (await response.json()) as { results?: StockSearchResult[] };
+        setSuggestions((payload.results ?? []).slice(0, 6));
+      } catch (caught) {
+        if (!(caught instanceof DOMException && caught.name === "AbortError")) {
+          setSuggestions([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) setSearching(false);
+      }
+    }, 240);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [query]);
 
   useEffect(() => {
     const saved = localStorage.getItem("northstar-recent");
@@ -164,6 +402,16 @@ export default function StockDashboard() {
     void loadStock("AAPL", "1y");
   }, [loadStock]);
 
+  const chooseStock = useCallback(
+    (result: StockSearchResult) => {
+      setQuery("");
+      setSuggestions([]);
+      setSearchFocused(false);
+      void loadStock(result.symbol, period, result);
+    },
+    [loadStock, period],
+  );
+
   async function submitSearch(event: FormEvent) {
     event.preventDefault();
     const cleaned = query.trim();
@@ -171,18 +419,24 @@ export default function StockDashboard() {
       setError("Enter a ticker or company name.");
       return;
     }
-    let ticker = cleaned.toUpperCase();
-    if (cleaned.includes(" ") || cleaned.length > 6) {
-      try {
-        const response = await fetch(`${API_BASE}/api/stocks/search?q=${encodeURIComponent(cleaned)}`);
-        const payload = await response.json();
-        ticker = payload.results?.[0]?.symbol || ticker;
-      } catch {
-        // The dashboard request below provides the user-facing error.
+    let match: StockSearchResult | undefined = suggestions.at(0);
+    if (!match) {
+      const response = await fetch(
+        `${API_BASE}/api/stocks/search?q=${encodeURIComponent(cleaned)}`,
+      ).catch(() => null);
+      if (response?.ok) {
+        const payload = (await response.json()) as { results?: StockSearchResult[] };
+        match = payload.results?.[0];
       }
     }
-    setQuery("");
-    await loadStock(ticker, period);
+    chooseStock(
+      match ?? {
+        symbol: cleaned.toUpperCase(),
+        name: cleaned,
+        exchange: "",
+        type: "EQUITY",
+      },
+    );
   }
 
   function selectPeriod(next: string) {
@@ -194,14 +448,15 @@ export default function StockDashboard() {
   const bestModel = data.predictions.models.find(
     (model) => model.name === data.predictions.best_model,
   );
-  const chartMin = useMemo(
-    () => Math.floor(Math.min(...data.chart.map((point) => point.lower_band ?? point.close)) * 0.97),
-    [data.chart],
-  );
-  const chartMax = useMemo(
-    () => Math.ceil(Math.max(...data.chart.map((point) => point.upper_band ?? point.close)) * 1.03),
-    [data.chart],
-  );
+  const [chartMin, chartMax] = useMemo(() => {
+    let minimum = Number.POSITIVE_INFINITY;
+    let maximum = Number.NEGATIVE_INFINITY;
+    for (const point of data.chart) {
+      minimum = Math.min(minimum, point.lower_band ?? point.close);
+      maximum = Math.max(maximum, point.upper_band ?? point.close);
+    }
+    return [Math.floor(minimum * 0.97), Math.ceil(maximum * 1.03)];
+  }, [data.chart]);
 
   return (
     <div className="app-shell">
@@ -232,16 +487,59 @@ export default function StockDashboard() {
 
       <main>
         <section className="command-row" aria-label="Stock search">
-          <form className="search-box" onSubmit={submitSearch}>
-            <Search size={19} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search a company or ticker..."
-              aria-label="Search a company or ticker"
-            />
-            <span className="key-hint"><Command size={12} /> K</span>
-          </form>
+          <div className="search-area">
+            <form className="search-box" onSubmit={submitSearch}>
+              <Search size={19} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => window.setTimeout(() => setSearchFocused(false), 140)}
+                placeholder="Search Ciena, Apple, Microsoft, or a ticker..."
+                aria-label="Search a company or ticker"
+                aria-autocomplete="list"
+                aria-expanded={searchFocused && (suggestions.length > 0 || searching)}
+                autoComplete="off"
+              />
+              {searching ? (
+                <span className="search-spinner" />
+              ) : (
+                <span className="key-hint"><Command size={12} /> K</span>
+              )}
+            </form>
+            {searchFocused && (suggestions.length > 0 || searching) && (
+              <div className="search-results" role="listbox" aria-label="Stock suggestions">
+                {searching && suggestions.length === 0 ? (
+                  <div className="search-result-loading">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                ) : (
+                  suggestions.map((result) => (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected="false"
+                      key={`${result.symbol}-${result.exchange}`}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => chooseStock(result)}
+                    >
+                      <span className="result-logo">
+                        {result.symbol.slice(0, 1)}
+                        {result.logo_url && <img src={result.logo_url} alt="" />}
+                      </span>
+                      <span className="result-copy">
+                        <strong>{result.name}</strong>
+                        <small>{result.symbol} · {result.exchange || result.type}</small>
+                      </span>
+                      <ArrowRight size={15} />
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
           <div className="recent-list">
             <span>Recent</span>
             {recent.slice(0, 3).map((item) => (
@@ -258,9 +556,24 @@ export default function StockDashboard() {
           </div>
         )}
 
-        <section className="stock-hero" id="overview">
+        <section className={loading ? "stock-hero identity-loading" : "stock-hero"} id="overview">
+          {transitionStock && (
+            <div className={`identity-flight ${identityPhase}`} aria-live="polite">
+              <div className="company-logo">
+                {transitionStock.symbol.slice(0, 1)}
+                {transitionStock.logo_url && <img src={transitionStock.logo_url} alt="" />}
+              </div>
+              <div>
+                <strong>{transitionStock.name}</strong>
+                <span>{transitionStock.symbol}</span>
+              </div>
+            </div>
+          )}
           <div className="company-block">
-            <div className="company-logo">{data.overview.symbol.slice(0, 1)}</div>
+            <div className="company-logo">
+              {data.overview.symbol.slice(0, 1)}
+              {data.overview.logo_url && <img src={data.overview.logo_url} alt="" />}
+            </div>
             <div>
               <div className="company-line">
                 <h1>{data.overview.name}</h1>
@@ -290,6 +603,7 @@ export default function StockDashboard() {
             detail={`${percent(data.statistics.cumulative_return)} total in range`}
             tone={data.statistics.annualized_return >= 0 ? "positive" : "negative"}
             icon={<TrendingUp size={18} />}
+            loading={loading}
           />
           <MetricCard
             label="Annualized volatility"
@@ -297,6 +611,7 @@ export default function StockDashboard() {
             detail={`Recent ${(data.risk.recent_annualized_volatility * 100).toFixed(1)}%`}
             tone="amber"
             icon={<Activity size={18} />}
+            loading={loading}
           />
           <MetricCard
             label="Risk score"
@@ -304,6 +619,7 @@ export default function StockDashboard() {
             detail={`${data.risk.classification} historical risk`}
             tone="amber"
             icon={<Gauge size={18} />}
+            loading={loading}
           />
           <MetricCard
             label="Max drawdown"
@@ -311,6 +627,7 @@ export default function StockDashboard() {
             detail="Peak-to-trough in range"
             tone="negative"
             icon={<ArrowDownRight size={18} />}
+            loading={loading}
           />
           <MetricCard
             label="Technical trend"
@@ -318,17 +635,19 @@ export default function StockDashboard() {
             detail={`RSI ${data.technical.rsi.toFixed(1)}`}
             tone={data.technical.signal.toLowerCase().includes("bull") ? "positive" : "neutral"}
             icon={<LineChart size={18} />}
+            loading={loading}
           />
           <MetricCard
             label="Best holdout model"
             value={data.predictions.best_model || "Not available"}
             detail={bestModel ? `RMSE ${money(bestModel.rmse)}` : "Needs more history"}
             icon={<BrainCircuit size={18} />}
+            loading={loading}
           />
         </section>
 
         <div className="primary-grid">
-          <section className="panel chart-panel">
+          <section className={loading ? "panel chart-panel loading-panel" : "panel chart-panel"}>
             <div className="panel-head">
               <div>
                 <span className="section-kicker">Market performance</span>
@@ -353,48 +672,20 @@ export default function StockDashboard() {
               <button className={showBands ? "chip active" : "chip"} onClick={() => setShowBands((value) => !value)}>
                 <span className="legend-dot blue" /> Bollinger bands
               </button>
-              <span className="chart-range">{money(chartMin, 0)} — {money(chartMax, 0)}</span>
+              <span className="chart-range">
+                {data.performance
+                  ? `${data.performance.rendered_points.toLocaleString()} of ${data.performance.source_points.toLocaleString()} points`
+                  : `${money(chartMin, 0)} — ${money(chartMax, 0)}`}
+              </span>
             </div>
-            <div className={loading ? "chart-wrap loading" : "chart-wrap"}>
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={data.chart} margin={{ top: 12, right: 4, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#8b7cff" stopOpacity={0.35} />
-                      <stop offset="100%" stopColor="#8b7cff" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="#252937" strokeDasharray="3 5" vertical={false} />
-                  <XAxis
-                    dataKey="date"
-                    axisLine={false}
-                    tickLine={false}
-                    minTickGap={42}
-                    tick={{ fill: "#747b8e", fontSize: 11 }}
-                    tickFormatter={(value) => new Date(`${value}T12:00:00`).toLocaleDateString("en-US", { month: "short" })}
-                  />
-                  <YAxis
-                    yAxisId="price"
-                    orientation="right"
-                    domain={[chartMin, chartMax]}
-                    axisLine={false}
-                    tickLine={false}
-                    width={46}
-                    tick={{ fill: "#747b8e", fontSize: 11 }}
-                    tickFormatter={(value) => `$${value}`}
-                  />
-                  <YAxis yAxisId="volume" hide domain={[0, "dataMax * 4"]} />
-                  <ChartTooltip content={<ChartTip />} cursor={{ stroke: "#7267f0", strokeDasharray: "4 4" }} />
-                  <Bar yAxisId="volume" dataKey="volume" fill="#30364a" opacity={0.45} />
-                  {showBands && <Line yAxisId="price" dataKey="upper_band" stroke="#3ea6ff" strokeOpacity={0.45} strokeDasharray="4 5" dot={false} />}
-                  {showBands && <Line yAxisId="price" dataKey="lower_band" stroke="#3ea6ff" strokeOpacity={0.45} strokeDasharray="4 5" dot={false} />}
-                  <Area yAxisId="price" type="monotone" dataKey="close" stroke="#9a8cff" strokeWidth={2.4} fill="url(#priceFill)" dot={false} activeDot={{ r: 4, fill: "#b8afff", stroke: "#11131a", strokeWidth: 2 }} />
-                  {showSma && <Line yAxisId="price" type="monotone" dataKey="sma20" stroke="#32c7a0" strokeWidth={1.5} dot={false} />}
-                  {showSma && <Line yAxisId="price" type="monotone" dataKey="sma50" stroke="#e5a94d" strokeWidth={1.4} dot={false} />}
-                </ComposedChart>
-              </ResponsiveContainer>
-              {loading && <div className="loading-overlay"><span /><small>Running analysis</small></div>}
-            </div>
+            <PriceChart
+              points={data.chart}
+              chartMin={chartMin}
+              chartMax={chartMax}
+              showSma={showSma}
+              showBands={showBands}
+              loading={loading}
+            />
             <div className="ohlc-row">
               <span>Open <strong>{money(data.overview.open)}</strong></span>
               <span>High <strong>{money(data.overview.day_high)}</strong></span>
@@ -405,7 +696,7 @@ export default function StockDashboard() {
             </div>
           </section>
 
-          <aside className="panel insight-panel" id="insights">
+          <aside className={loading ? "panel insight-panel loading-panel" : "panel insight-panel"} id="insights">
             <div className="panel-head">
               <div>
                 <span className="section-kicker purple"><Sparkles size={13} /> Grounded insights</span>
@@ -440,11 +731,12 @@ export default function StockDashboard() {
               <p><strong>Know the limits.</strong> These observations explain calculated values. They are not personalized financial advice or guaranteed forecasts.</p>
             </div>
             <button className="text-button">Read methodology <ArrowRight size={15} /></button>
+            {loading && <ContainerLoader label="Writing grounded brief" />}
           </aside>
         </div>
 
         <div className="analysis-grid" id="technicals">
-          <section className="panel technical-panel">
+          <section className={loading ? "panel technical-panel loading-panel" : "panel technical-panel"}>
             <div className="panel-head">
               <div>
                 <span className="section-kicker">Rule-based signals</span>
@@ -473,9 +765,10 @@ export default function StockDashboard() {
               <div><span>Current price</span><strong>{money(data.overview.price)}</strong><i className="current" style={{ width: "68%" }} /></div>
               <div><span>Resistance zone</span><strong>{money(data.technical.resistance)}</strong><i className="resistance" style={{ width: "82%" }} /></div>
             </div>
+            {loading && <ContainerLoader label="Calculating indicators" />}
           </section>
 
-          <section className="panel risk-panel">
+          <section className={loading ? "panel risk-panel loading-panel" : "panel risk-panel"}>
             <div className="panel-head">
               <div>
                 <span className="section-kicker">Transparent scoring</span>
@@ -511,10 +804,11 @@ export default function StockDashboard() {
               <span>95% daily VaR <strong>{(data.statistics.value_at_risk_95 * 100).toFixed(2)}%</strong></span>
               <span>Sharpe ratio <strong>{data.statistics.sharpe_ratio.toFixed(2)}</strong></span>
             </div>
+            {loading && <ContainerLoader label="Scoring historical risk" />}
           </section>
         </div>
 
-        <section className="panel models-panel" id="models">
+        <section className={loading ? "panel models-panel loading-panel" : "panel models-panel"} id="models">
           <div className="panel-head">
             <div>
               <span className="section-kicker"><BrainCircuit size={13} /> Chronological holdout</span>
@@ -567,6 +861,7 @@ export default function StockDashboard() {
             <Info size={16} />
             <span>Experimental estimates based on historical data only. Earlier observations train each model; later observations evaluate it. No rows are randomly shuffled.</span>
           </div>
+          {loading && <ContainerLoader label="Evaluating chronological models" />}
         </section>
 
         <footer>

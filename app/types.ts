@@ -8,6 +8,14 @@ export type ChartPoint = {
   lower_band: number | null;
 };
 
+export type StockSearchResult = {
+  symbol: string;
+  name: string;
+  exchange: string;
+  type: string;
+  logo_url?: string;
+};
+
 export type ModelResult = {
   name: string;
   mae: number;
@@ -103,4 +111,10 @@ export type DashboardData = {
   insights: Array<{ title: string; body: string }>;
   chart: ChartPoint[];
   period: string;
+  performance?: {
+    source_points: number;
+    rendered_points: number;
+    sampling: string;
+    model_observation_limit: number;
+  };
 };

@@ -12,6 +12,7 @@ ranges are displayed, and all estimates are labeled experimental.
 ## What is included
 
 - Search by ticker or company name, with recent searches stored in the browser
+- Debounced autocomplete for company names such as Ciena → CIEN
 - Yahoo Finance company overview and historical OHLCV data
 - Interactive ranges from one month through maximum available history
 - Moving-average and Bollinger Band overlays
@@ -24,6 +25,27 @@ ranges are displayed, and all estimates are labeled experimental.
 - Deterministic insight text composed only from calculated metrics
 - Embedded demo data for a useful UI when the local API is offline
 - Responsive dark-mode UI with loading and error states
+- Coordinated in-card loading states and left-to-right chart reveal motion
+
+## Performance design
+
+- Large histories are reduced to at most 650 rendered points with the
+  linear-time Largest-Triangle-Three-Buckets algorithm, preserving peaks and
+  turning points instead of naively dropping every nth row.
+- Yahoo history, company search, overview data, and complete dashboard
+  responses use bounded TTL/LRU caches with O(1) lookup and eviction.
+- Dashboard JSON is gzip-compressed, stale browser requests are cancelled, and
+  company-name lookup is debounced.
+- The chart is memoized so typing in search does not rerender thousands of SVG
+  nodes. Expensive per-point chart tweening is replaced by one composited
+  left-to-right reveal.
+- Model training uses the latest 2,500 valid chronological observations, which
+  bounds runtime without shuffling or leaking future data.
+
+NumPy, pandas, and scikit-learn already execute their heavy numerical kernels
+in compiled native code. A separate C/C++ service would add deployment and
+memory-safety complexity without improving the browser's graph-rendering
+bottleneck.
 
 ## Project structure
 

@@ -7,6 +7,8 @@ from app.services.analytics import (
     risk_assessment,
     technical_snapshot,
 )
+from app.services.cache import TTLCache
+from app.services.downsampling import largest_triangle_three_buckets
 
 
 def sample_frame(days: int = 300) -> pd.DataFrame:
@@ -51,3 +53,23 @@ def test_risk_score_uses_bounded_scale():
     risk = risk_assessment(stats, indicators)
     assert 0 <= risk["score"] <= 100
     assert "volatility" in risk["formula"]
+
+
+def test_lttb_preserves_bounds_and_requested_size():
+    frame = sample_frame(10_000)
+    sampled = largest_triangle_three_buckets(frame, 600)
+    assert len(sampled) == 600
+    assert sampled.index[0] == frame.index[0]
+    assert sampled.index[-1] == frame.index[-1]
+    assert sampled.index.is_monotonic_increasing
+
+
+def test_ttl_cache_evicts_least_recently_used_item():
+    cache: TTLCache[str, int] = TTLCache(max_size=2, ttl_seconds=60)
+    cache.set("first", 1)
+    cache.set("second", 2)
+    assert cache.get("first") == 1
+    cache.set("third", 3)
+    assert cache.get("second") is None
+    assert cache.get("first") == 1
+    assert cache.get("third") == 3

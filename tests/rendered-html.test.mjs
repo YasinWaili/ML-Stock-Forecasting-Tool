@@ -4,10 +4,15 @@ import test from "node:test";
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
+  const { default: handler } = await import(workerUrl.href);
+  const request = new Request("http://localhost/", {
+    headers: { accept: "text/html" },
+  });
 
-  return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
+  if (typeof handler === "function") return handler(request);
+
+  return handler.fetch(
+    request,
     {
       ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) },
     },
