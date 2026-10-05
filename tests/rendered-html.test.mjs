@@ -20,16 +20,20 @@ async function render() {
   );
 }
 
-test("server-renders the Northstar dashboard", async () => {
+test("server-renders the Stock Analysis workspace without fake account controls", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Northstar/);
-  assert.match(html, /Stock intelligence, made legible/);
-  assert.match(html, /northstar/);
+  assert.match(html, /<title>Stock Analysis/);
+  assert.match(html, /Search a company or ticker/);
+  assert.match(html, /Switch to light theme/);
   assert.match(html, /Price history/);
   assert.match(html, /Model comparison/);
-  assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Starter Project/i);
+  assert.doesNotMatch(
+    html,
+    /codex-preview|react-loading-skeleton|Starter Project|northstar|Notifications|Settings|>YW</i,
+  );
+  assert.doesNotMatch(html, /239\.42/); // Never silently show the old synthetic price.
 });

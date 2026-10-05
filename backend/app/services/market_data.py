@@ -1,13 +1,61 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 
 import pandas as pd
 import yfinance as yf
+from curl_cffi import requests
 
 from .cache import TTLCache
+
+# Keep provider cookies beside the app, not in a possibly unwritable user profile.
+_provider_cache = Path(__file__).resolve().parents[2] / ".cache" / "yfinance"
+_provider_cache.mkdir(parents=True, exist_ok=True)
+yf.set_tz_cache_location(str(_provider_cache))
+
+_logo_cache: TTLCache[str, tuple[bytes, str]] = TTLCache(max_size=128, ttl_seconds=86400)
+_domains = {"AAPL": "apple.com", "MSFT": "microsoft.com", "NVDA": "nvidia.com",
+            "CIEN": "ciena.com", "AMD": "amd.com", "MU": "micron.com",
+            "AMZN": "amazon.com", "GOOG": "google.com", "GOOGL": "google.com",
+            "META": "meta.com", "TSLA": "tesla.com"}
+
+
+def company_info(symbol: str) -> dict[str, Any]:
+    key = symbol.upper()
+    cached = _overview_cache.get(key)
+    if cached is not None:
+        return cached
+    info = yf.Ticker(key).info or {}
+    if info:
+        _overview_cache.set(key, info)
+    return info
+
+
+def fetch_logo(symbol: str) -> tuple[bytes, str]:
+    key = symbol.upper()
+    cached = _logo_cache.get(key)
+    if cached is not None:
+        return cached
+    domain = _domains.get(key)
+    if not domain:
+        domain = urlparse(company_info(key).get("website") or "").hostname
+    if not domain:
+        raise LookupError("No company logo is available.")
+    # Only this fixed image provider is contacted; never proxy arbitrary client URLs.
+    response = requests.get("https://www.google.com/s2/favicons?" +
+                            urlencode({"domain": domain, "sz": 128}), timeout=8,
+                            impersonate="chrome")
+    content_type = response.headers.get("content-type", "").split(";")[0]
+    if response.status_code != 200 or content_type not in {"image/png", "image/jpeg", "image/x-icon", "image/vnd.microsoft.icon"}:
+        raise LookupError("No company logo is available.")
+    if not response.content or len(response.content) > 512_000:
+        raise LookupError("Invalid company logo.")
+    result = (response.content, content_type)
+    _logo_cache.set(key, result)
+    return result
 
 
 PERIODS = {
@@ -45,13 +93,13 @@ def fetch_history(symbol: str, period: str) -> pd.DataFrame:
     if cached is not None:
         return cached.copy(deep=False)
 
-    frame = yf.download(
-        symbol,
+    frame = yf.Ticker(symbol).history(
         period=PERIODS[period],
         interval="1d",
         auto_adjust=False,
-        progress=False,
-        threads=False,
+        actions=False,
+        raise_errors=True,
+        timeout=12,
     )
     if frame.empty:
         raise LookupError(f"No Yahoo Finance data was found for {symbol}.")
@@ -70,7 +118,7 @@ def search_symbols(query: str) -> list[dict[str, str]]:
         return cached
 
     try:
-        quotes = yf.Search(cleaned, max_results=6).quotes
+        quotes = yf.Search(cleaned, max_results=6, timeout=10).quotes
         results = []
         for quote in quotes:
             if quote.get("quoteType") not in {"EQUITY", "ETF"}:
@@ -82,38 +130,22 @@ def search_symbols(query: str) -> list[dict[str, str]]:
                 {
                     "symbol": symbol,
                     "name": quote.get("shortname") or quote.get("longname") or symbol,
-                    "exchange": quote.get("exchange") or "",
+                    "exchange": quote.get("exchDisp") or quote.get("exchange") or "",
                     "type": quote.get("quoteType") or "",
-                    "logo_url": quote.get("logoUrl") or "",
+                    "logo_url": f"/api/stocks/{symbol}/logo",
                 }
             )
-        if results:
-            _search_cache.set(cache_key, results)
-            return results
-    except Exception:
-        pass
-    fallback = [
-        {
-            "symbol": cleaned.upper(),
-            "name": cleaned.upper(),
-            "exchange": "",
-            "type": "EQUITY",
-            "logo_url": "",
-        }
-    ]
-    _search_cache.set(cache_key, fallback)
-    return fallback
+        _search_cache.set(cache_key, results)
+        return results
+    except Exception as error:
+        raise RuntimeError("Company search is temporarily unavailable.") from error
 
 
 def fetch_overview(symbol: str, frame: pd.DataFrame) -> dict[str, Any]:
-    info = _overview_cache.get(symbol.upper())
-    if info is None:
-        ticker = yf.Ticker(symbol)
-        try:
-            info = ticker.info or {}
-        except Exception:
-            info = {}
-        _overview_cache.set(symbol.upper(), info)
+    try:
+        info = company_info(symbol)
+    except Exception:
+        info = {}
 
     close = frame["Close"].astype(float)
     latest = float(close.iloc[-1])
@@ -121,13 +153,7 @@ def fetch_overview(symbol: str, frame: pd.DataFrame) -> dict[str, Any]:
     last_row = frame.iloc[-1]
     recent_year = frame.tail(252)
     currency = info.get("currency") or "USD"
-    website = info.get("website") or ""
-    website_domain = urlparse(website).netloc.removeprefix("www.")
-    logo_url = info.get("logo_url") or (
-        f"https://www.google.com/s2/favicons?domain={website_domain}&sz=128"
-        if website_domain
-        else ""
-    )
+    logo_url = f"/api/stocks/{symbol.upper()}/logo"
     return {
         "symbol": symbol.upper(),
         "name": info.get("longName") or info.get("shortName") or symbol.upper(),
@@ -145,10 +171,10 @@ def fetch_overview(symbol: str, frame: pd.DataFrame) -> dict[str, Any]:
         "week_52_low": float(info.get("fiftyTwoWeekLow") or recent_year["Low"].min()),
         "sector": info.get("sector") or "—",
         "industry": info.get("industry") or "—",
-        "exchange": info.get("exchange") or info.get("fullExchangeName") or "—",
+        "exchange": info.get("fullExchangeName") or info.get("exchange") or "—",
         "currency": currency,
         "logo_url": logo_url,
-        "market_state": info.get("marketState") or "CLOSED",
+        "market_state": info.get("marketState") or "UNKNOWN",
         "as_of": frame.index[-1].date().isoformat(),
         "retrieved_at": datetime.now(timezone.utc).isoformat(),
         "source": "Yahoo Finance",

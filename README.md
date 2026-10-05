@@ -1,6 +1,6 @@
-# Northstar
+# Stock Analysis
 
-Northstar is a local-first stock research prototype that combines Yahoo Finance
+Stock Analysis is a local-first stock research prototype that combines Yahoo Finance
 market data, transparent statistical analysis, rule-based technical signals,
 historical risk scoring, chronological machine-learning evaluation, and
 metric-grounded narrative insights.
@@ -23,9 +23,11 @@ ranges are displayed, and all estimates are labeled experimental.
 - Linear Regression and Random Forest models using chronological holdouts
 - MAE, RMSE, directional accuracy, forecast ranges, and execution time
 - Deterministic insight text composed only from calculated metrics
-- Embedded demo data for a useful UI when the local API is offline
-- Responsive dark-mode UI with loading and error states
-- Coordinated in-card loading states and left-to-right chart reveal motion
+- Company logos in search results and the selected company header, with initials as a fallback
+- Explicit sample mode when the local API is offline (never silently substituted)
+- Responsive light and dark themes with a saved browser preference
+- In-card loading states, measured logo transitions, and left-to-right chart reveal motion
+- One-command startup for the dashboard and local API
 
 ## Performance design
 
@@ -69,17 +71,16 @@ public/                      Browser and social-preview assets
 
 ## Run locally
 
-Open two terminals from the repository root.
+Use a terminal in the repository root. First-time setup:
 
-### 1. Start the API
+### 1. Install dependencies
 
 PowerShell:
 
 ```powershell
 python -m venv backend/.venv
 backend/.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
-$env:PYTHONPATH = "backend"
-backend/.venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8000
+npm.cmd install
 ```
 
 macOS or Linux:
@@ -87,32 +88,54 @@ macOS or Linux:
 ```bash
 python3 -m venv backend/.venv
 backend/.venv/bin/python -m pip install -r backend/requirements.txt
-PYTHONPATH=backend backend/.venv/bin/python -m uvicorn app.main:app --reload --port 8000
+npm install
 ```
 
-The API and interactive documentation are available at:
+### 2. Start the app
 
-- `http://127.0.0.1:8000/api/health`
-- `http://127.0.0.1:8000/docs`
+PowerShell (use `npm.cmd` to avoid Windows blocking `npm.ps1`):
 
-### 2. Start the dashboard
+```powershell
+npm.cmd run dev
+```
 
 ```bash
-npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+That command starts **both** the API and the website. Open the local URL printed
+by the web server (normally `http://localhost:3000`). If port 3000 is occupied, it
+will print a different port. Ctrl+C stops the services started by this command.
+The website hot-reloads frontend edits. Restart the command after backend edits.
 
-Set `NEXT_PUBLIC_API_URL` only if the API is running somewhere other than
-`http://127.0.0.1:8000`.
+The browser uses same-origin `/api` requests; the server forwards them to the
+local Python API. The default API port is 8010. If Windows blocks it:
+
+```powershell
+$env:STOCK_API_PORT = "8020"
+npm.cmd run dev
+```
+
+To use an API that is already running elsewhere, set `STOCK_API_URL` to its
+origin (for example `http://127.0.0.1:8000`). This is a server-only setting.
+`npm.cmd run dev:web` starts just the website when you manage the API separately.
+API health: `/api/health` on the website; interactive API docs:
+`http://127.0.0.1:8010/docs`.
+
+Yahoo Finance must be reachable for live data. Provider cookies and timezone
+data are cached inside ignored `backend/.cache/`, rather than a user-profile
+folder. Company icons are retrieved from company website favicons via Google's
+fixed image endpoint and cached for 24 hours. Some companies do not have a
+usable icon; their initial remains visible instead of a broken image.
 
 ## Verification
 
 ```powershell
 $env:PYTHONPATH = "backend"
 backend/.venv/Scripts/python.exe -m pytest backend/tests -q
-npm run build
+npm.cmd run lint
+npx.cmd tsc --noEmit
+npm.cmd test
 ```
 
 ## API surface
@@ -120,6 +143,7 @@ npm run build
 - `GET /api/health`
 - `GET /api/stocks/search?q=apple`
 - `GET /api/stocks/AAPL/dashboard?period=1y`
+- `GET /api/stocks/AAPL/logo`
 
 Supported periods are `1m`, `3mo`, `6mo`, `1y`, `5y`, and `max`.
 
@@ -141,4 +165,23 @@ Each component is normalized to a 0–100 scale before weighting.
 Forecasts are experiments based on historical prices, volume, and derived
 features. They cannot anticipate news, earnings surprises, macroeconomic
 shocks, liquidity changes, or other unexpected events. Past performance does
-not guarantee future results. Northstar does not provide financial advice.
+not guarantee future results. Stock Analysis does not provide financial advice.
+
+## Design direction
+
+The interface emphasizes the company, price, and a readable chart. Volume has
+its own pane instead of obscuring the price line. Summary metrics are plain
+rows; detailed indicators and model evaluation sit lower on the page. The
+existing purple trend mark is preserved. Non-functional account, notification,
+and settings controls have been removed.
+
+Reference interfaces: [TradingView stock overview](https://www.tradingview.com/symbols/NASDAQ-AAPL/)
+and [Koyfin graphing and financial analysis](https://www.koyfin.com/features/).
+
+## Dependency security
+
+Compatible React and Next.js security patches are installed. The dependency
+audit still reports nine high-severity advisories in the current Vinext toolchain
+(image parsing and glob-pattern denial of service). Resolving these requires a
+separately tested framework migration. Keep this prototype local; do not expose
+the development server publicly. Run `npm.cmd audit` before any deployment.

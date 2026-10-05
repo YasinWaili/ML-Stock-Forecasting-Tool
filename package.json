@@ -1,22 +1,23 @@
 {
-  "name": "northstar-stock-intelligence",
+  "name": "stock-analysis",
   "version": "0.1.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vinext dev",
+    "dev": "node scripts/run.mjs",
+    "dev:web": "vinext dev",
     "build": "vinext build",
-    "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "start": "node scripts/run.mjs --production",
+    "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
     "lucide-react": "^1.26.0",
-    "next": "^16.2.11",
-    "react": "19.2.6",
-    "react-dom": "19.2.6",
+    "next": "^16.3.8",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "recharts": "^3.10.0"
   },
   "devDependencies": {
@@ -28,8 +29,9 @@
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.2.6",
-    "react-server-dom-webpack": "19.2.6",
+    "eslint-config-next": "16.3.8",
+    "prettier": "^3.9.9",
+    "react-server-dom-webpack": "19.2.8",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vinext": "0.0.50",

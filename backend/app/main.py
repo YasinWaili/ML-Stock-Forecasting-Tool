@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import math
+import re
+import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
@@ -16,11 +19,11 @@ from .services.analytics import (
 from .services.insights import create_insights
 from .services.cache import TTLCache
 from .services.downsampling import largest_triangle_three_buckets
-from .services.market_data import fetch_history, fetch_overview, search_symbols
+from .services.market_data import fetch_history, fetch_overview, search_symbols, fetch_logo
 from .services.prediction import compare_models
 
 app = FastAPI(
-    title="Northstar Stock Intelligence API",
+    title="Stock Analysis API",
     version="0.1.0",
     description="Local-first market data, analytics, risk, and forecasting API.",
 )
@@ -57,7 +60,28 @@ def health() -> dict[str, str]:
 
 @app.get("/api/stocks/search")
 def search_stocks(q: str = Query(min_length=1, max_length=80)) -> dict[str, Any]:
-    return {"query": q, "results": search_symbols(q)}
+    try:
+        return {"query": q, "results": search_symbols(q)}
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+def normalize_symbol(symbol: str) -> str:
+    normalized = symbol.strip().upper()
+    if not re.fullmatch(r"[A-Z0-9^][A-Z0-9.^=\-]{0,19}", normalized):
+        raise HTTPException(status_code=400, detail="Enter a valid ticker symbol.")
+    return normalized
+
+
+@app.get("/api/stocks/{symbol}/logo")
+def stock_logo(symbol: str) -> Response:
+    normalized = normalize_symbol(symbol)
+    try:
+        content, media_type = fetch_logo(normalized)
+        return Response(content, media_type=media_type,
+                        headers={"Cache-Control": "public, max-age=86400"})
+    except Exception as error:
+        raise HTTPException(status_code=404, detail="Company logo unavailable.") from error
 
 
 @app.get("/api/stocks/{symbol}/dashboard")
@@ -66,9 +90,7 @@ def stock_dashboard(
     period: str = "1y",
     max_points: int = Query(default=650, ge=200, le=1_200),
 ) -> dict[str, Any]:
-    normalized = symbol.strip().upper()
-    if not normalized or len(normalized) > 12:
-        raise HTTPException(status_code=400, detail="Enter a valid ticker symbol.")
+    normalized = normalize_symbol(symbol)
     cache_key = (normalized, period, max_points)
     cached = _dashboard_cache.get(cache_key)
     if cached is not None:
@@ -92,6 +114,7 @@ def stock_dashboard(
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except Exception as error:
+        logging.getLogger(__name__).exception("Market data request failed for %s", normalized)
         raise HTTPException(
             status_code=503,
             detail="Market data is temporarily unavailable. Please try again shortly.",
