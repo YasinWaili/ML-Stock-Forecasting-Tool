@@ -3,12 +3,19 @@ from __future__ import annotations
 import math
 import re
 import logging
+import csv
+import io
+import json
+from contextlib import asynccontextmanager
+from datetime import date
+from typing import Literal
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from pydantic import BaseModel, ConfigDict, Field
 
 from .services.analytics import (
     add_indicators,
@@ -20,11 +27,23 @@ from .services.insights import create_insights
 from .services.cache import TTLCache
 from .services.downsampling import largest_triangle_three_buckets
 from .services.market_data import fetch_history, fetch_overview, search_symbols, fetch_logo
-from .services.prediction import compare_models
+from .services.jobs import ResearchWorker, VERSIONS
+from .services.storage import ResearchStore
+from .services.replay import reveal
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    application.state.store = ResearchStore()
+    application.state.worker = ResearchWorker(application.state.store)
+    application.state.worker.start()
+    yield
+    application.state.worker.stop()
 
 app = FastAPI(
     title="Stock Analysis API",
-    version="0.1.0",
+    version="0.2.0",
+    lifespan=lifespan,
     description="Local-first market data, analytics, risk, and forecasting API.",
 )
 app.add_middleware(
@@ -55,7 +74,7 @@ def _safe(value: Any) -> Any:
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.get("/api/stocks/search")
@@ -107,7 +126,7 @@ def stock_dashboard(
         statistics = calculate_statistics(history, benchmark)
         technical = technical_snapshot(indicators)
         risk = risk_assessment(statistics, indicators)
-        predictions = compare_models(history)
+        predictions = {"status": "pending", "models": [], "message": "Model evaluation runs separately in the background research queue."}
         insights = create_insights(overview, statistics, technical, risk, predictions)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -161,3 +180,84 @@ def stock_dashboard(
     )
     _dashboard_cache.set(cache_key, response)
     return response
+
+
+class ResearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["analysis", "replay", "backtest"]
+    symbols: list[str] = Field(min_length=1, max_length=3)
+    period: Literal["1y", "5y", "max"] = "5y"
+    snapshot_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{24}$")
+    as_of: date | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    initial_cash: float = Field(default=10_000, ge=100, le=1_000_000_000, allow_inf_nan=False)
+    fee_bps: float = Field(default=5, ge=0, le=100, allow_inf_nan=False)
+    slippage_bps: float = Field(default=5, ge=0, le=100, allow_inf_nan=False)
+    strategy: Literal["sma", "ml"] = "sma"
+    force: bool = False
+
+
+@app.post("/api/jobs", status_code=202)
+def create_job(body: ResearchRequest) -> dict[str, Any]:
+    symbols = list(dict.fromkeys(normalize_symbol(symbol) for symbol in body.symbols))
+    if body.kind != "analysis" and len(symbols) != 1:
+        raise HTTPException(400, "Replay and backtesting run on one stock at a time.")
+    if body.snapshot_id and len(symbols) != 1:
+        raise HTTPException(400, "A saved dataset belongs to one stock.")
+    if body.kind == "replay" and body.as_of is None:
+        raise HTTPException(400, "Choose a historical replay date.")
+    if body.start_date and body.end_date and body.start_date > body.end_date:
+        raise HTTPException(400, "The start date must be before the end date.")
+    params = body.model_dump(mode="json", exclude={"kind", "force"})
+    params["symbols"] = symbols
+    params["refresh_data"] = body.force
+    try:
+        job = app.state.store.enqueue(body.kind, params, json.dumps(VERSIONS, sort_keys=True), body.force)
+        app.state.worker.wake.set()
+        return job
+    except OverflowError as error:
+        raise HTTPException(429, str(error)) from error
+
+
+@app.get("/api/jobs")
+def list_jobs() -> dict[str, Any]:
+    return {"jobs": app.state.store.list_jobs()}
+
+
+def saved_job(identity: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[a-f0-9]{32}", identity):
+        raise HTTPException(404, "Research run not found.")
+    try:
+        return app.state.store.job(identity)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+
+
+@app.get("/api/jobs/{identity}")
+def get_job(identity: str) -> dict[str, Any]:
+    return saved_job(identity)
+
+
+@app.get("/api/replays/{identity}/reveal")
+def reveal_replay(identity: str, steps: int = Query(default=1, ge=1, le=60)) -> dict[str, Any]:
+    job = saved_job(identity)
+    if job["kind"] != "replay" or job["status"] != "completed":
+        raise HTTPException(409, "Complete a replay before revealing its outcome.")
+    result = job["result"]["results"][0]
+    _, history = app.state.store.snapshot(result["dataset"]["id"])
+    return _safe(reveal(history, result, steps))
+
+
+@app.get("/api/jobs/{identity}/ledger")
+def download_ledger(identity: str) -> Response:
+    job = saved_job(identity)
+    if job["kind"] != "backtest" or job["status"] != "completed":
+        raise HTTPException(409, "Complete a backtest before exporting its ledger.")
+    rows = job["result"]["results"][0]["ledger"]
+    fields = ["signal_date", "execution_date", "side", "units", "price", "fee", "slippage_cost", "cash_after", "reason", "model_version", "training_cutoff"]
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows(rows)
+    return Response(buffer.getvalue(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="backtest-{identity[:8]}.csv"'})

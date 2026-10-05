@@ -31,6 +31,8 @@ test("server-renders the Stock Analysis workspace without fake account controls"
   assert.match(html, /Switch to light theme/);
   assert.match(html, /Price history/);
   assert.match(html, /Model comparison/);
+  assert.match(html, /Research lab/);
+  assert.match(html, /Saved runs/);
   assert.doesNotMatch(
     html,
     /codex-preview|react-loading-skeleton|Starter Project|northstar|Notifications|Settings|>YW</i,

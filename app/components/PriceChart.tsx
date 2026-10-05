@@ -36,11 +36,16 @@ export const PriceChart = memo(function PriceChart({
 }: Props) {
   const money = useMemo(
     () =>
-      new Intl.NumberFormat("en", {
-        style: "currency",
-        currency,
-        maximumFractionDigits: 2,
-      }),
+      new Intl.NumberFormat(
+        "en",
+        currency
+          ? {
+              style: "currency",
+              currency,
+              maximumFractionDigits: 2,
+            }
+          : { maximumFractionDigits: 2 },
+      ),
     [currency],
   );
   const bounds = useMemo(() => {

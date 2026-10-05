@@ -103,7 +103,7 @@ export type DashboardData = {
   };
   predictions: {
     status: string;
-    best_model?: string;
+    best_model?: string | null;
     models: ModelResult[];
     disclaimer?: string;
     message?: string;

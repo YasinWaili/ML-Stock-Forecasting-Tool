@@ -46,17 +46,26 @@ function launch(command, args, env = process.env) {
   });
   return child;
 }
-async function healthy() {
+async function apiStatus() {
   try {
     const response = await fetch(`${apiUrl}/api/health`, {
-      signal: AbortSignal.timeout(1000),
+      signal: AbortSignal.timeout(3000),
     });
-    return response.ok && (await response.json()).status === "ok";
+    const payload = await response.json();
+    if (!response.ok || payload.status !== "ok") return "offline";
+    return payload.version === "0.2.0" ? "ready" : "outdated";
   } catch {
-    return false;
+    return "offline";
   }
 }
-if (!(await healthy())) {
+const existingApi = await apiStatus();
+if (existingApi === "outdated") {
+  console.error(
+    `An older API is still running at ${apiUrl}. Stop that server and restart npm.cmd run dev, or configure a different API port/address.`,
+  );
+  process.exit(1);
+}
+if (existingApi === "offline") {
   if (process.env.STOCK_API_URL) {
     console.error(`The configured API is not responding at ${apiUrl}.`);
     process.exit(1);
@@ -70,12 +79,22 @@ if (!(await healthy())) {
   console.log(`Starting Stock Analysis API at ${apiUrl}`);
   launch(
     python,
-    ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", port],
+    [
+      "-u",
+      "-m",
+      "uvicorn",
+      "app.main:app",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      port,
+    ],
     { ...process.env, PYTHONPATH: resolve(root, "backend") },
   );
   let ready = false;
-  for (let attempt = 0; attempt < 40 && !closing; attempt++) {
-    if (await healthy()) {
+  // Scientific libraries can take longer to import on a cold Windows/OneDrive start.
+  for (let attempt = 0; attempt < 120 && !closing; attempt++) {
+    if ((await apiStatus()) === "ready") {
       ready = true;
       break;
     }
@@ -94,6 +113,9 @@ if (!closing) {
     [
       resolve(root, "node_modules/vinext/dist/cli.js"),
       production ? "start" : "dev",
+      ...process.argv
+        .slice(2)
+        .filter((argument) => argument !== "--production"),
     ],
     { ...process.env, STOCK_API_URL: apiUrl },
   );

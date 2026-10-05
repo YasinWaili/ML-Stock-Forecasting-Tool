@@ -85,25 +85,26 @@ def _flatten(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.dropna(subset=["Close"]).sort_index()
 
 
-def fetch_history(symbol: str, period: str) -> pd.DataFrame:
+def fetch_history(symbol: str, period: str, refresh: bool = False) -> pd.DataFrame:
     if period not in PERIODS:
         raise ValueError(f"Unsupported period '{period}'.")
     cache_key = (symbol.upper(), period)
     cached = _history_cache.get(cache_key)
-    if cached is not None:
+    if cached is not None and not refresh:
         return cached.copy(deep=False)
 
     frame = yf.Ticker(symbol).history(
         period=PERIODS[period],
         interval="1d",
         auto_adjust=False,
-        actions=False,
+        actions=True,
         raise_errors=True,
         timeout=12,
     )
     if frame.empty:
         raise LookupError(f"No Yahoo Finance data was found for {symbol}.")
     normalized = _flatten(frame)
+    normalized.attrs["fetched_at"] = datetime.now(timezone.utc).isoformat()
     _history_cache.set(cache_key, normalized)
     return normalized.copy(deep=False)
 

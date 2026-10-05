@@ -28,6 +28,8 @@ import {
 import { demoData } from "./demo-data";
 import { PriceChart } from "./components/PriceChart";
 import { CompanyLogo } from "./components/CompanyLogo";
+import { ResearchWorkbench } from "./components/ResearchWorkbench";
+import type { EvaluationResult } from "./research-types";
 import type { DashboardData, StockSearchResult } from "./types";
 
 const periods = [
@@ -136,6 +138,34 @@ export default function StockDashboard() {
   const logoTarget = useRef<HTMLDivElement>(null);
   const origin = useRef<Origin | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const acceptEvaluation = useCallback(
+    (symbol: string, predictions: EvaluationResult) => {
+      setData((previous) => {
+        if (
+          !previous ||
+          previous.overview.symbol !== symbol ||
+          predictions.dataset.quality.last_date !== previous.overview.as_of
+        )
+          return previous;
+        const best = predictions.models.find(
+          (model) => model.name === predictions.best_model,
+        );
+        const modelText = best
+          ? `${best.name} had the lowest error across three chronological test windows. Its next-session estimate is ${best.latest_prediction.toFixed(2)}. This ranking can change; the last-close baseline is included for comparison.`
+          : predictions.message || "Model evaluation is unavailable.";
+        return {
+          ...previous,
+          predictions,
+          insights: previous.insights.map((insight) =>
+            insight.title === "Model readout"
+              ? { ...insight, body: modelText }
+              : insight,
+          ),
+        };
+      });
+    },
+    [],
+  );
 
   const loadStock = useCallback(
     async (stock: StockSearchResult, range: string, from?: Origin) => {
@@ -372,6 +402,7 @@ export default function StockDashboard() {
             <a href="#overview">Overview</a>
             <a href="#technicals">Technicals</a>
             <a href="#models">Models</a>
+            <a href="#research">Research</a>
           </nav>
           <button
             className="icon-button theme-toggle"
@@ -947,7 +978,7 @@ export default function StockDashboard() {
                         <strong>{model.name}</strong>
                         {model.name === visible.predictions.best_model && (
                           <small className="best-model">
-                            Lowest holdout error
+                            Lowest unseen error
                           </small>
                         )}
                       </td>
@@ -997,10 +1028,25 @@ export default function StockDashboard() {
             </div>
           )}
           <p className="panel-footnote">
-            Estimates use historical price and volume only. Ranges are based on
-            holdout residuals, not guarantees of future coverage.
+            Estimates use historical price and volume only. Live evaluations use
+            three chronological windows and separate interval calibration. A
+            target coverage is not a guarantee. See the research lab for
+            details.
           </p>
         </Panel>
+        <ResearchWorkbench
+          key={selection.symbol}
+          symbol={selection.symbol}
+          period={period}
+          theme={theme}
+          enabled={Boolean(
+            data &&
+            !loading &&
+            !sample &&
+            data.overview.symbol === selection.symbol,
+          )}
+          onEvaluation={acceptEvaluation}
+        />
         <details className="statistics-detail">
           <summary>
             More statistics & methodology <ChevronDown size={16} />
@@ -1040,10 +1086,11 @@ export default function StockDashboard() {
           <p>
             Statistics use the full selected history. Large charts are reduced
             to at most 650 points using Largest-Triangle-Three-Buckets sampling.
-            Model training is limited to 2,500 recent observations, split
-            chronologically. Returns use unadjusted daily closing prices;
-            dividends are not included. Annualization assumes 252 trading days.
-            Signals and scores are formula-based, not recommendations.
+            Model training is limited to 2,500 recent observations, with
+            expanding chronological test windows and a one-row boundary gap.
+            Overview returns use daily closing prices; dividends are not
+            included. Annualization assumes 252 trading days. Signals and scores
+            are formula-based, not recommendations.
           </p>
         </details>
         <footer className="site-footer">
