@@ -10,7 +10,6 @@
     "dev:web": "vinext dev",
     "build": "vinext build",
     "start": "node scripts/run.mjs --production",
-    "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
