@@ -265,17 +265,6 @@ features. They cannot anticipate news, earnings surprises, macroeconomic
 shocks, liquidity changes, or other unexpected events. Past performance does
 not guarantee future results. Stock Analysis does not provide financial advice.
 
-## Design direction
-
-The interface emphasizes the company, price, and a readable chart. Volume has
-its own pane instead of obscuring the price line. Summary metrics are plain
-rows; detailed indicators and model evaluation sit lower on the page. The
-existing purple trend mark is preserved. Non-functional account, notification,
-and settings controls have been removed.
-
-Reference interfaces: [TradingView stock overview](https://www.tradingview.com/symbols/NASDAQ-AAPL/)
-and [Koyfin graphing and financial analysis](https://www.koyfin.com/features/).
-
 ## Dependency security
 
 Compatible React and Next.js security patches are installed. The dependency
